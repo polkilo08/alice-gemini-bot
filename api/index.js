@@ -1,7 +1,6 @@
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
-// Используем самую стабильную и быструю модель для продакшена
 const GEMINI_MODEL = 'gemini-1.5-flash';
 
 const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный голосовой ассистент. 
@@ -76,7 +75,9 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
       parts: [{ text: promptText }]
     });
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    // Исправлено: используем стабильную версию v1 вместо v1beta
+    const url = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
