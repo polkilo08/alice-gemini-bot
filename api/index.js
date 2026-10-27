@@ -11,10 +11,9 @@ const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный
 5. Если предоставлен контекст из интернета, используй его для актуальных вопросов, но не считай его безусловно достоверным.`;
 
 const MODEL_CANDIDATES = [
-  { model: 'gemini-2.5-flash', api: 'v1beta' },
   { model: 'gemini-3.8-flash', api: 'v1beta' },
-  { model: 'gemini-3.7-flash', api: 'v1beta' },
-  { model: 'gemini-3.5-flash', api: 'v1beta' }
+  { model: 'gemini-3.6-flash', api: 'v1beta' },
+  { model: 'gemini-3.1-flash-lite', api: 'v1beta' }
 ];
 
 function needsWebSearch(query) {
