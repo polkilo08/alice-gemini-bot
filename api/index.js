@@ -1,8 +1,6 @@
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
-const GEMINI_MODEL = 'gemini-1.5-flash';
-
 const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный голосовой ассистент. 
 Твой стиль: вежливый, лаконичный, умный, с легким британским лоском (обращайся к пользователю «сэр», но без излишней навязчивости).
 КРИТИЧЕСКИ ВАЖНО ДЛЯ ГОЛОСА:
@@ -75,44 +73,65 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
       parts: [{ text: promptText }]
     });
 
-    // Исправлено: используем стабильную версию v1 вместо v1beta
-    const url = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-    
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 200
-        }
-      }),
-      signal: controller.signal
+    const bodyData = JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      generationConfig: {
+        temperature: 0.7,
+        maxOutputTokens: 200
+      }
     });
 
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      const errMsg = errData?.error?.message || `HTTP ${res.status}`;
-      console.error(`Gemini API Error:`, res.status, errMsg);
-      return { error: `Код ${res.status}: ${errMsg}` };
+    // Список комбинаций моделей и версий API для автоматического подбора
+    const candidates = [
+      { model: 'gemini-1.5-flash', api: 'v1beta' },
+      { model: 'gemini-1.5-flash', api: 'v1' },
+      { model: 'gemini-1.5-flash-001', api: 'v1beta' },
+      { model: 'gemini-pro', api: 'v1' }
+    ];
+
+    let lastErrorMsg = '';
+
+    for (const c of candidates) {
+      if (controller.signal.aborted) break;
+      const url = `https://generativelanguage.googleapis.com/${c.api}/models/${c.model}:generateContent?key=${GEMINI_API_KEY}`;
+      
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: bodyData,
+        signal: controller.signal
+      });
+
+      if (res.status === 404) {
+        lastErrorMsg = `404 (${c.model} / ${c.api})`;
+        continue; // Пробуем следующую комбинацию
+      }
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData?.error?.message || `HTTP ${res.status}`;
+        console.error(`Gemini API Error (${c.model} @ ${c.api}):`, res.status, errMsg);
+        return { error: `Код ${res.status}: ${errMsg}` };
+      }
+
+      const data = await res.json();
+      const rawReply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!rawReply) {
+        continue;
+      }
+
+      const cleanText = rawReply
+        .replace(/[*#_~`>]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 950);
+
+      return { text: cleanText };
     }
 
-    const data = await res.json();
-    const rawReply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!rawReply) {
-      return { error: 'Пустой ответ от модели' };
-    }
-
-    const cleanText = rawReply
-      .replace(/[*#_~`>]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 950);
-
-    return { text: cleanText };
+    return { error: `Все модели недоступны (${lastErrorMsg})` };
   } catch (err) {
     console.error('Gemini request failed:', err.message);
     return { error: 'Таймаут соединения с нейросетью' };
