@@ -1,13 +1,14 @@
-```javascript
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
 const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный голосовой ассистент.
-Твой стиль: вежливый, лаконичный, умный, с легким британским лоском (обращайся к пользователю «сэр», но без излишней навязчивости).
+Твой стиль: вежливый, лаконичный, умный, с легким британским лоском. Обращайся к пользователю «сэр», но без излишней навязчивости.
 КРИТИЧЕСКИ ВАЖНО ДЛЯ ГОЛОСА:
-1. Отвечай кратко: не более 2–3 предложений (до 300 символов), чтобы ответ быстро зачитывался вслух.
-2. ЗАПРЕЩЕНО использовать Markdown-разметку: никаких звездочек (*), решеток (#), жирного шрифта или списков с дефисами.
-3. Пиши чистым связным текстом.`;
+1. Отвечай кратко: не более 2–3 предложений, желательно до 300 символов.
+2. Не используй Markdown, списки, звездочки и заголовки.
+3. Пиши чистым, естественным, связным текстом.
+4. Не выдумывай факты. Если не знаешь ответа, честно скажи об этом.
+5. Если предоставлен контекст из интернета, используй его для актуальных вопросов, но не считай его безусловно достоверным.`;
 
 const MODEL_CANDIDATES = [
   { model: 'gemini-3.8-flash', api: 'v1beta' },
@@ -26,7 +27,7 @@ function needsWebSearch(query) {
     'сегодня', 'сейчас', 'вчера', '2026', 'кто выиграл', 'счет матча',
     'найди', 'поищи', 'сколько стоит', 'цена', 'расписание',
     'где находится', 'последние события', 'актуальн',
-    'какой день', 'число'
+    'какой день', 'число', 'последние новости', 'проверь в интернете'
   ];
 
   return triggers.some(word => q.includes(word));
@@ -95,7 +96,7 @@ async function askGemini(
   userMessage,
   history = [],
   searchContext = '',
-  timeoutMs = 2700
+  timeoutMs = 5000
 ) {
   if (!GEMINI_API_KEY) {
     return { error: 'Не задан GEMINI_API_KEY' };
@@ -177,7 +178,6 @@ async function askGemini(
 
         console.error('Gemini API error:', lastErrorMsg);
 
-        // Эти ошибки обычно не исправляются выбором другой модели.
         if ([400, 401, 403].includes(res.status)) {
           return { error: lastErrorMsg };
         }
@@ -312,8 +312,8 @@ export default async function handler(req, res) {
     if (!originalUtterance) {
       return res.status(200).json({
         version,
-        session,
         session_state: { history },
+        session,
         response: {
           text: 'Я вас внимательно слушаю, сэр.',
           end_session: false
@@ -327,8 +327,9 @@ export default async function handler(req, res) {
       searchContext = await fetchSearchContext(originalUtterance);
     }
 
+    // Учитываем время, потраченное на поиск.
     const elapsed = Date.now() - startTime;
-    const remainingTime = Math.max(1200, 2800 - elapsed);
+    const remainingTime = Math.max(1200, 5000 - elapsed);
 
     const result = await askGemini(
       originalUtterance,
@@ -393,4 +394,3 @@ export default async function handler(req, res) {
     });
   }
 }
-```
