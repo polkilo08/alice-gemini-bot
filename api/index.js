@@ -1,26 +1,40 @@
+```javascript
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
-const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный голосовой ассистент. 
+const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный голосовой ассистент.
 Твой стиль: вежливый, лаконичный, умный, с легким британским лоском (обращайся к пользователю «сэр», но без излишней навязчивости).
 КРИТИЧЕСКИ ВАЖНО ДЛЯ ГОЛОСА:
 1. Отвечай кратко: не более 2–3 предложений (до 300 символов), чтобы ответ быстро зачитывался вслух.
 2. ЗАПРЕЩЕНО использовать Markdown-разметку: никаких звездочек (*), решеток (#), жирного шрифта или списков с дефисами.
 3. Пиши чистым связным текстом.`;
 
+const MODEL_CANDIDATES = [
+  { model: 'gemini-3.8-flash', api: 'v1beta' },
+  { model: 'gemini-3.7-flash', api: 'v1beta' },
+  { model: 'gemini-3.5-flash', api: 'v1beta' },
+  { model: 'gemini-2.5-flash', api: 'v1beta' }
+];
+
 function needsWebSearch(query) {
   if (!SERPER_API_KEY) return false;
+
   const q = query.toLowerCase();
+
   const triggers = [
     'погод', 'новости', 'курс', 'доллар', 'евро', 'биткоин', 'рубл',
     'сегодня', 'сейчас', 'вчера', '2026', 'кто выиграл', 'счет матча',
-    'найди', 'поищи', 'сколько стоит', 'цена', 'расписание', 'где находится',
-    'последние события', 'актуальн', 'какой день', 'число'
+    'найди', 'поищи', 'сколько стоит', 'цена', 'расписание',
+    'где находится', 'последние события', 'актуальн',
+    'какой день', 'число'
   ];
+
   return triggers.some(word => q.includes(word));
 }
 
 async function fetchSearchContext(query) {
+  if (!SERPER_API_KEY) return '';
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 900);
 
@@ -31,22 +45,35 @@ async function fetchSearchContext(query) {
         'X-API-KEY': SERPER_API_KEY,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ q: query, gl: 'ru', hl: 'ru', num: 3 }),
+      body: JSON.stringify({
+        q: query,
+        gl: 'ru',
+        hl: 'ru',
+        num: 3
+      }),
       signal: controller.signal
     });
 
-    if (!res.ok) return '';
+    if (!res.ok) {
+      console.warn('Serper API error:', res.status);
+      return '';
+    }
+
     const data = await res.json();
     const snippets = [];
 
     if (data.answerBox?.answer || data.answerBox?.snippet) {
       snippets.push(data.answerBox.answer || data.answerBox.snippet);
     }
+
     if (Array.isArray(data.organic)) {
       data.organic.slice(0, 3).forEach(item => {
-        if (item.snippet) snippets.push(`${item.title}: ${item.snippet}`);
+        if (item.snippet) {
+          snippets.push(`${item.title}: ${item.snippet}`);
+        }
       });
     }
+
     return snippets.join('\n');
   } catch (err) {
     console.warn('Search skipped/timed out:', err.message);
@@ -56,16 +83,38 @@ async function fetchSearchContext(query) {
   }
 }
 
-async function askGemini(userMessage, history = [], searchContext = '', timeoutMs = 2700) {
+function cleanReply(text) {
+  return text
+    .replace(/[*#_~`>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 950);
+}
+
+async function askGemini(
+  userMessage,
+  history = [],
+  searchContext = '',
+  timeoutMs = 2700
+) {
+  if (!GEMINI_API_KEY) {
+    return { error: 'Не задан GEMINI_API_KEY' };
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const contents = [...history];
-    
+
     let promptText = userMessage;
+
     if (searchContext) {
-      promptText = `Контекст из интернета:\n${searchContext}\n\nВопрос: ${userMessage}`;
+      promptText =
+        `Контекст из интернета:\n${searchContext}\n\n` +
+        `Вопрос пользователя: ${userMessage}\n\n` +
+        'Используй контекст, если он относится к вопросу. ' +
+        'Если информации недостаточно, не выдумывай факты.';
     }
 
     contents.push({
@@ -74,7 +123,9 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
     });
 
     const bodyData = JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      systemInstruction: {
+        parts: [{ text: SYSTEM_PROMPT }]
+      },
       contents,
       generationConfig: {
         temperature: 0.7,
@@ -82,59 +133,96 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
       }
     });
 
-    // Список комбинаций моделей и версий API для автоматического подбора
-    const candidates = [
-      { model: 'gemini-1.5-flash', api: 'v1beta' },
-      { model: 'gemini-1.5-flash', api: 'v1' },
-      { model: 'gemini-1.5-flash-001', api: 'v1beta' },
-      { model: 'gemini-pro', api: 'v1' }
-    ];
-
     let lastErrorMsg = '';
 
-    for (const c of candidates) {
-      if (controller.signal.aborted) break;
-      const url = `https://generativelanguage.googleapis.com/${c.api}/models/${c.model}:generateContent?key=${GEMINI_API_KEY}`;
-      
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: bodyData,
-        signal: controller.signal
-      });
+    for (const candidate of MODEL_CANDIDATES) {
+      if (controller.signal.aborted) {
+        lastErrorMsg = 'Превышено время ожидания Gemini API';
+        break;
+      }
 
-      if (res.status === 404) {
-        lastErrorMsg = `404 (${c.model} / ${c.api})`;
-        continue; // Пробуем следующую комбинацию
+      const url =
+        `https://generativelanguage.googleapis.com/` +
+        `${candidate.api}/models/${candidate.model}:generateContent`;
+
+      let res;
+
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': GEMINI_API_KEY
+          },
+          body: bodyData,
+          signal: controller.signal
+        });
+      } catch (err) {
+        lastErrorMsg = err.name === 'AbortError'
+          ? 'Таймаут соединения с Gemini API'
+          : `Ошибка соединения: ${err.message}`;
+
+        console.error(candidate.model, lastErrorMsg);
+
+        if (err.name === 'AbortError') break;
+        continue;
       }
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        const errMsg = errData?.error?.message || `HTTP ${res.status}`;
-        console.error(`Gemini API Error (${c.model} @ ${c.api}):`, res.status, errMsg);
-        return { error: `Код ${res.status}: ${errMsg}` };
-      }
+        const errMsg =
+          errData?.error?.message || `HTTP ${res.status}`;
 
-      const data = await res.json();
-      const rawReply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        lastErrorMsg = `${candidate.model}: HTTP ${res.status} — ${errMsg}`;
 
-      if (!rawReply) {
+        console.error('Gemini API error:', lastErrorMsg);
+
+        // Эти ошибки обычно не исправляются выбором другой модели.
+        if ([400, 401, 403].includes(res.status)) {
+          return { error: lastErrorMsg };
+        }
+
+        // При 404, 429 и серверных ошибках пробуем следующую модель.
         continue;
       }
 
-      const cleanText = rawReply
-        .replace(/[*#_~`>]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 950);
+      const data = await res.json();
 
-      return { text: cleanText };
+      const rawReply = data?.candidates
+        ?.flatMap(item => item?.content?.parts || [])
+        ?.find(part => typeof part.text === 'string')
+        ?.text;
+
+      if (!rawReply) {
+        lastErrorMsg = `${candidate.model}: пустой ответ модели`;
+        console.warn(lastErrorMsg);
+        continue;
+      }
+
+      const cleanText = cleanReply(rawReply);
+
+      if (!cleanText) {
+        lastErrorMsg = `${candidate.model}: ответ после очистки пуст`;
+        continue;
+      }
+
+      return {
+        text: cleanText,
+        model: candidate.model
+      };
     }
 
-    return { error: `Все модели недоступны (${lastErrorMsg})` };
+    return {
+      error: lastErrorMsg || 'Все доступные модели не ответили'
+    };
   } catch (err) {
     console.error('Gemini request failed:', err.message);
-    return { error: 'Таймаут соединения с нейросетью' };
+
+    return {
+      error: err.name === 'AbortError'
+        ? 'Таймаут соединения с нейросетью'
+        : 'Ошибка обращения к Gemini API'
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -145,28 +233,60 @@ export default async function handler(req, res) {
     return res.status(200).send('Jarvis API is online, sir.');
   }
 
+  if (req.method !== 'POST') {
+    return res.status(405).json({
+      error: 'Method Not Allowed'
+    });
+  }
+
   const startTime = Date.now();
 
   try {
-    const { request, session, state, version = '1.0' } = req.body || {};
-    const command = (request?.command || '').trim();
-    const originalUtterance = (request?.original_utterance || command).trim();
-    const history = Array.isArray(state?.session?.history) ? state.session.history : [];
+    const {
+      request,
+      session,
+      state,
+      version = '1.0'
+    } = req.body || {};
 
-    if (session?.new && (!command || command.toLowerCase().includes('запусти навык'))) {
+    const command = (request?.command || '').trim();
+
+    const originalUtterance =
+      (request?.original_utterance || command).trim();
+
+    const history = Array.isArray(state?.session?.history)
+      ? state.session.history
+      : [];
+
+    if (
+      session?.new &&
+      (!command || command.toLowerCase().includes('запусти навык'))
+    ) {
+      const greeting =
+        'Джарвис на связи, сэр. Все системы в норме. Чем могу помочь?';
+
       return res.status(200).json({
         version,
         session,
         session_state: { history: [] },
         response: {
-          text: 'Джарвис на связи, сэр. Все системы в норме. Чем могу помочь?',
-          tts: 'Джарвис на связи, сэр. Все системы в норме. Чем могу помочь?',
+          text: greeting,
+          tts: greeting,
           end_session: false
         }
       });
     }
 
-    const exitWords = ['хватит', 'стоп', 'выход', 'выйти', 'пока', 'отключись', 'закончить'];
+    const exitWords = [
+      'хватит',
+      'стоп',
+      'выход',
+      'выйти',
+      'пока',
+      'отключись',
+      'закончить'
+    ];
+
     if (exitWords.includes(command.toLowerCase())) {
       return res.status(200).json({
         version,
@@ -183,7 +303,7 @@ export default async function handler(req, res) {
         version,
         session,
         response: {
-          text: 'Сэр, в настройках сервера Vercel не найден ключ GEMINI_API_KEY.',
+          text: 'Сэр, на сервере не настроен ключ Gemini API.',
           end_session: false
         }
       });
@@ -202,6 +322,7 @@ export default async function handler(req, res) {
     }
 
     let searchContext = '';
+
     if (needsWebSearch(originalUtterance)) {
       searchContext = await fetchSearchContext(originalUtterance);
     }
@@ -209,15 +330,24 @@ export default async function handler(req, res) {
     const elapsed = Date.now() - startTime;
     const remainingTime = Math.max(1200, 2800 - elapsed);
 
-    const result = await askGemini(originalUtterance, history, searchContext, remainingTime);
+    const result = await askGemini(
+      originalUtterance,
+      history,
+      searchContext,
+      remainingTime
+    );
 
     if (result.error || !result.text) {
+      console.error('Jarvis request failed:', result.error);
+
       return res.status(200).json({
         version,
         session,
         session_state: { history },
         response: {
-          text: `Сэр, произошла заминка: ${result.error}. Повторите запрос, пожалуйста.`,
+          text:
+            'Сэр, произошла заминка при обработке запроса. ' +
+            'Повторите попытку, пожалуйста.',
           end_session: false
         }
       });
@@ -225,22 +355,34 @@ export default async function handler(req, res) {
 
     const updatedHistory = [
       ...history,
-      { role: 'user', parts: [{ text: originalUtterance }] },
-      { role: 'model', parts: [{ text: result.text }] }
+      {
+        role: 'user',
+        parts: [{ text: originalUtterance }]
+      },
+      {
+        role: 'model',
+        parts: [{ text: result.text }]
+      }
     ].slice(-6);
+
+    console.log(
+      `Jarvis answered using ${result.model} in ${Date.now() - startTime} ms`
+    );
 
     return res.status(200).json({
       version,
       session,
-      session_state: { history: updatedHistory },
+      session_state: {
+        history: updatedHistory
+      },
       response: {
         text: result.text,
         end_session: false
       }
     });
-
   } catch (err) {
     console.error('Critical webhook error:', err);
+
     return res.status(200).json({
       version: req.body?.version || '1.0',
       session: req.body?.session || {},
@@ -251,3 +393,4 @@ export default async function handler(req, res) {
     });
   }
 }
+```
