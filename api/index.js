@@ -11,10 +11,10 @@ const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный
 5. Если предоставлен контекст из интернета, используй его для актуальных вопросов, но не считай его безусловно достоверным.`;
 
 const MODEL_CANDIDATES = [
+  { model: 'gemini-2.5-flash', api: 'v1beta' },
   { model: 'gemini-3.8-flash', api: 'v1beta' },
   { model: 'gemini-3.7-flash', api: 'v1beta' },
-  { model: 'gemini-3.5-flash', api: 'v1beta' },
-  { model: 'gemini-2.5-flash', api: 'v1beta' }
+  { model: 'gemini-3.5-flash', api: 'v1beta' }
 ];
 
 function needsWebSearch(query) {
@@ -329,7 +329,7 @@ export default async function handler(req, res) {
 
     // Учитываем время, потраченное на поиск.
     const elapsed = Date.now() - startTime;
-    const remainingTime = Math.max(1200, 5000 - elapsed);
+    const remainingTime = Math.max(1200, 8000 - elapsed);
 
     const result = await askGemini(
       originalUtterance,
