@@ -1,8 +1,8 @@
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const SERPER_API_KEY = process.env.SERPER_API_KEY;
 
-// Используем модель, которая успешно приняла запрос без 404
-const GEMINI_MODEL = 'gemini-flash-latest';
+// Используем самую стабильную и быструю модель для продакшена
+const GEMINI_MODEL = 'gemini-1.5-flash';
 
 const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный голосовой ассистент. 
 Твой стиль: вежливый, лаконичный, умный, с легким британским лоском (обращайся к пользователю «сэр», но без излишней навязчивости).
@@ -25,7 +25,7 @@ function needsWebSearch(query) {
 
 async function fetchSearchContext(query) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 1000);
+  const timer = setTimeout(() => controller.abort(), 900);
 
   try {
     const res = await fetch('https://google.serper.dev/search', {
@@ -68,7 +68,7 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
     
     let promptText = userMessage;
     if (searchContext) {
-      promptText = `Контекст из интернета (актуальные данные на сегодня):\n${searchContext}\n\nВопрос пользователя: ${userMessage}`;
+      promptText = `Контекст из интернета:\n${searchContext}\n\nВопрос: ${userMessage}`;
     }
 
     contents.push({
@@ -85,11 +85,7 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
         contents,
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 250,
-          // Отключаем "размышления", чтобы ответ генерировался за 0.4–0.7 сек
-          thinkingConfig: {
-            thinkingBudget: 0
-          }
+          maxOutputTokens: 200
         }
       }),
       signal: controller.signal
@@ -98,14 +94,12 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       const errMsg = errData?.error?.message || `HTTP ${res.status}`;
-      console.error(`Gemini API Error (${GEMINI_MODEL}):`, res.status, errMsg);
+      console.error(`Gemini API Error:`, res.status, errMsg);
       return { error: `Код ${res.status}: ${errMsg}` };
     }
 
     const data = await res.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const textPart = parts.find(p => p.text && !p.thought) || parts[0];
-    const rawReply = textPart?.text;
+    const rawReply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!rawReply) {
       return { error: 'Пустой ответ от модели' };
@@ -119,8 +113,8 @@ async function askGemini(userMessage, history = [], searchContext = '', timeoutM
 
     return { text: cleanText };
   } catch (err) {
-    console.error('Gemini request aborted/failed:', err.message);
-    return { error: `Таймаут запроса (${err.name})` };
+    console.error('Gemini request failed:', err.message);
+    return { error: 'Таймаут соединения с нейросетью' };
   } finally {
     clearTimeout(timer);
   }
@@ -193,7 +187,7 @@ export default async function handler(req, res) {
     }
 
     const elapsed = Date.now() - startTime;
-    const remainingTime = Math.max(1200, 2850 - elapsed);
+    const remainingTime = Math.max(1200, 2800 - elapsed);
 
     const result = await askGemini(originalUtterance, history, searchContext, remainingTime);
 
@@ -203,7 +197,7 @@ export default async function handler(req, res) {
         session,
         session_state: { history },
         response: {
-          text: `Сэр, возникла заминка связи с нейросетью: ${result.error}. Повторите вопрос, пожалуйста.`,
+          text: `Сэр, произошла заминка: ${result.error}. Повторите запрос, пожалуйста.`,
           end_session: false
         }
       });
@@ -231,7 +225,7 @@ export default async function handler(req, res) {
       version: req.body?.version || '1.0',
       session: req.body?.session || {},
       response: {
-        text: 'Произошел технический сбой в модуле обработки, сэр. Попробуйте еще раз.',
+        text: 'Произошел технический сбой, сэр. Попробуйте еще раз.',
         end_session: false
       }
     });
