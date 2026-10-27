@@ -133,9 +133,11 @@ async function askGemini(
       parts: [{ text: SYSTEM_PROMPT }]
     },
     contents,
-    generationConfig: {
-      maxOutputTokens: 200
-    }
+    maxOutputTokens: 500,
+  thinkingConfig: {
+    thinkingBudget: 0
+  }
+}
   });
 
   for (const candidate of MODEL_CANDIDATES) {
