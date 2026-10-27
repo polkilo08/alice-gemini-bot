@@ -6,6 +6,7 @@ const WEB_SEARCH_TIMEOUT_MS = 1500;
 const MAX_SEARCH_CONTEXT_CHARS = 6500;
 const MAX_HISTORY_MESSAGES = 6;
 const REQUEST_TIMEOUT_MS = 8000;
+const MODEL_TIMEOUT_MS = 2000;
 
 const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный голосовой ассистент.
 
@@ -36,9 +37,9 @@ const SYSTEM_PROMPT = `Ты — Джарвис, интеллектуальный
 10. Если найденных данных недостаточно, прямо обозначь ограничение.`;
 
 const MODEL_CANDIDATES = [
+  { model: 'gemini-3.1-flash-lite', api: 'v1beta' },
   { model: 'gemini-3.6-flash', api: 'v1beta' },
-  { model: 'gemini-3.8-flash', api: 'v1beta' },
-  { model: 'gemini-3.1-flash-lite', api: 'v1beta' }
+  { model: 'gemini-3.8-flash', api: 'v1beta' }
 ];
 
 function needsWebSearch(query) {
@@ -343,13 +344,16 @@ async function askGemini(
   for (const candidate of MODEL_CANDIDATES) {
     const remainingMs = deadline - Date.now();
 
-    if (remainingMs <= 500) {
-      lastErrorMsg = 'Недостаточно времени для следующего запроса Gemini';
+    if (remainingMs <= 300) {
+      lastErrorMsg = 'Исчерпан временной бюджет запроса Gemini';
       break;
     }
 
     const controller = new AbortController();
-    const attemptTimeout = Math.min(6500, remainingMs);
+    const attemptTimeout = Math.min(
+      MODEL_TIMEOUT_MS,
+      remainingMs - 200
+    );
 
     const timer = setTimeout(
       () => controller.abort(),
@@ -381,14 +385,21 @@ async function askGemini(
         lastErrorMsg =
           `${candidate.model}: HTTP ${res.status} — ${errMsg}`;
 
+        if (res.status === 429) {
+          console.warn(
+            `Gemini quota/rate limit for ${candidate.model}; trying next model`
+          );
+          continue;
+        }
+
         console.error('Gemini API error:', lastErrorMsg);
 
-        // Ошибки авторизации не исправляются сменой модели.
         if ([401, 403].includes(res.status)) {
           return { error: lastErrorMsg };
         }
 
-        // Для HTTP 400 и временных ошибок пробуем следующую модель.
+        // Ошибка параметров или временная ошибка:
+        // пробуем следующую модель, пока есть время.
         continue;
       }
 
@@ -419,7 +430,6 @@ async function askGemini(
 
       if (firstCandidate?.finishReason === 'MAX_TOKENS') {
         lastErrorMsg = `${candidate.model}: превышен лимит токенов`;
-        console.warn('Gemini returned an incomplete answer');
         continue;
       }
 
@@ -439,7 +449,7 @@ async function askGemini(
         ? `${candidate.model}: таймаут`
         : `${candidate.model}: ${err.message}`;
 
-      console.error('Gemini request error:', lastErrorMsg);
+      console.warn('Gemini request error:', lastErrorMsg);
     } finally {
       clearTimeout(timer);
     }
@@ -572,8 +582,8 @@ export default async function handler(req, res) {
         session_state: { history },
         response: {
           text:
-            'Сэр, произошла заминка при обработке запроса. ' +
-            'Повторите попытку, пожалуйста.',
+            'Сэр, сейчас мои языковые модели недоступны. ' +
+            'Попробуйте немного позже.',
           end_session: false
         }
       });
